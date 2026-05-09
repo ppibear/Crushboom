@@ -1,0 +1,201 @@
+
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+#wrap { display: flex; flex-direction: column; align-items: center; padding: 1rem 0; font-family: var(--font-mono); }
+#hud { display: flex; gap: 2rem; margin-bottom: 12px; font-size: 14px; color: var(--color-text-secondary); }
+#hud span { color: var(--color-text-primary); font-weight: 500; }
+canvas { border: 2px solid var(--color-border-primary); border-radius: var(--border-radius-md); display: block; background: #0a0a0f; }
+#msg { margin-top: 12px; font-size: 14px; color: var(--color-text-secondary); min-height: 20px; }
+#btns { display: flex; gap: 8px; margin-top: 10px; }
+button { cursor: pointer; font-size: 13px; padding: 6px 18px; border-radius: var(--border-radius-md); border: 0.5px solid var(--color-border-secondary); background: var(--color-background-primary); color: var(--color-text-primary); }
+button:hover { background: var(--color-background-secondary); }
+</style>
+
+<div id="wrap">
+  <h2 class="sr-only">打砖块游戏，使用方向键或鼠标移动挡板</h2>
+  <div id="hud">得分：<span id="score">0</span>&nbsp;&nbsp;击碎：<span id="count">0</span>&nbsp;&nbsp;最高分：<span id="best">0</span></div>
+  <canvas id="c" width="620" height="420"></canvas>
+  <div id="msg">按空格键 / 点击开始游戏 &nbsp;|&nbsp; ← → 键或鼠标移动挡板</div>
+  <div id="btns"><button id="btnStart">开始 / 重置</button></div>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+const COLS = 10, ROWS = 5;
+const BW = 52, BH = 18, BPAD = 4;
+const BOARD_W = 90, BOARD_H = 10;
+const BALL_R = 7;
+
+const SHAPES = ['■','★','◆'];
+const COLORS = ['#e05a5a','#f5c842','#5aade0','#7de07d','#e07de0','#e0a05a'];
+
+let bricks=[], ball={}, board={}, state='idle', score=0, count=0, best=0, animId;
+
+function initBricks(){
+  bricks=[];
+  const offX = (W - (COLS*(BW+BPAD)-BPAD))/2;
+  const offY = 48;
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<COLS;c++){
+      const t = Math.floor(Math.random()*3);
+      bricks.push({
+        x: offX + c*(BW+BPAD), y: offY + r*(BH+BPAD),
+        type: t, alive: true,
+        color: COLORS[(r*COLS+c)%COLORS.length],
+        score: (t+1)*10
+      });
+    }
+  }
+}
+
+function initBall(){
+  ball = { x: W/2, y: H-80, r: BALL_R, vx: 1.75*(Math.random()<0.5?1:-1), vy: -2 };
+}
+
+function initBoard(){
+  board = { x: W/2 - BOARD_W/2, y: H-30, w: BOARD_W, h: BOARD_H, target: W/2 };
+}
+
+function reset(){
+  score=0; count=0;
+  document.getElementById('score').textContent=0;
+  document.getElementById('count').textContent=0;
+  initBricks(); initBall(); initBoard();
+  state='ready';
+  setMsg('按空格 / 点击开始');
+}
+
+function setMsg(t){ document.getElementById('msg').textContent=t; }
+
+function drawBrick(b){
+  if(!b.alive) return;
+  ctx.fillStyle = b.color;
+  ctx.beginPath(); ctx.roundRect(b.x,b.y,BW,BH,4); ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,0.15)';
+  ctx.beginPath(); ctx.roundRect(b.x,b.y,BW,BH/2,4); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='12px serif';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(SHAPES[b.type], b.x+BW/2, b.y+BH/2);
+}
+
+function drawBoard(){
+  ctx.fillStyle='#e05a5a';
+  ctx.beginPath(); ctx.roundRect(board.x,board.y,board.w,board.h,5); ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,0.3)';
+  ctx.fillRect(board.x+6,board.y+2,board.w-12,3);
+}
+
+function drawBall(){
+  ctx.fillStyle='#f5c842';
+  ctx.beginPath(); ctx.arc(ball.x,ball.y,ball.r,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,0.6)';
+  ctx.beginPath(); ctx.arc(ball.x-2,ball.y-2,ball.r*0.35,0,Math.PI*2); ctx.fill();
+}
+
+function drawBg(){
+  ctx.fillStyle='#0a0a0f'; ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle='rgba(255,255,255,0.03)'; ctx.lineWidth=1;
+  for(let x=0;x<W;x+=30){ ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke(); }
+  for(let y=0;y<H;y+=30){ ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke(); }
+}
+
+let particles=[];
+function spawnParticle(x,y,color){
+  for(let i=0;i<8;i++){
+    const a=Math.random()*Math.PI*2, s=1.5+Math.random()*2.5;
+    particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:1,color});
+  }
+}
+function updateParticles(){
+  particles=particles.filter(p=>p.life>0);
+  for(let p of particles){
+    p.x+=p.vx; p.y+=p.vy; p.vy+=0.1; p.life-=0.04;
+    ctx.globalAlpha=p.life; ctx.fillStyle=p.color;
+    ctx.beginPath();ctx.arc(p.x,p.y,3,0,Math.PI*2);ctx.fill();
+    ctx.globalAlpha=1;
+  }
+}
+
+function collide(){
+  if(ball.x-ball.r<0){ ball.x=ball.r; ball.vx=Math.abs(ball.vx); }
+  if(ball.x+ball.r>W){ ball.x=W-ball.r; ball.vx=-Math.abs(ball.vx); }
+  if(ball.y-ball.r<0){ ball.y=ball.r; ball.vy=Math.abs(ball.vy); }
+  if(ball.y+ball.r>H){
+    state='dead'; best=Math.max(best,score);
+    document.getElementById('best').textContent=best;
+    setMsg('游戏结束！得分 '+score+'  按空格/点击重试'); return;
+  }
+  if(ball.vy>0 && ball.y+ball.r>=board.y && ball.y+ball.r<=board.y+board.h+4
+     && ball.x>=board.x-2 && ball.x<=board.x+board.w+2){
+    ball.vy=-Math.abs(ball.vy);
+    ball.vx = ((ball.x-(board.x+board.w/2))/(board.w/2))*2.5;
+    ball.y = board.y-ball.r-1;
+  }
+  let hit=false;
+  for(let b of bricks){
+    if(!b.alive||hit) continue;
+    if(ball.x+ball.r>b.x && ball.x-ball.r<b.x+BW && ball.y+ball.r>b.y && ball.y-ball.r<b.y+BH){
+      b.alive=false; hit=true;
+      score+=b.score; count++;
+      document.getElementById('score').textContent=score;
+      document.getElementById('count').textContent=count;
+      const overlapL=ball.x+ball.r-b.x, overlapR=b.x+BW-(ball.x-ball.r);
+      const overlapT=ball.y+ball.r-b.y, overlapB=b.y+BH-(ball.y-ball.r);
+      if(Math.min(overlapL,overlapR)<Math.min(overlapT,overlapB)) ball.vx*=-1;
+      else ball.vy*=-1;
+      spawnParticle(b.x+BW/2,b.y+BH/2,b.color);
+    }
+  }
+  if(bricks.every(b=>!b.alive)){
+    state='win'; best=Math.max(best,score);
+    document.getElementById('best').textContent=best;
+    setMsg('全部击碎！得分 '+score+'  按空格/点击继续');
+  }
+}
+
+function moveBoard(){
+  const diff = board.target-(board.x+board.w/2);
+  board.x += diff*0.18;
+  board.x = Math.max(0, Math.min(W-board.w, board.x));
+}
+
+function loop(){
+  drawBg();
+  for(let b of bricks) drawBrick(b);
+  drawBoard(); drawBall(); updateParticles();
+  if(state==='play'){ ball.x+=ball.vx; ball.y+=ball.vy; moveBoard(); collide(); }
+  animId=requestAnimationFrame(loop);
+}
+
+const keys={};
+document.addEventListener('keydown',e=>{
+  keys[e.key]=true;
+  if(e.key===' '){ e.preventDefault(); handleStart(); }
+  if(e.key==='ArrowLeft')  board.target=Math.max(board.w/2, board.target-18);
+  if(e.key==='ArrowRight') board.target=Math.min(W-board.w/2, board.target+18);
+});
+document.addEventListener('keyup',e=>{ keys[e.key]=false; });
+
+setInterval(()=>{
+  if(state!=='play') return;
+  if(keys['ArrowLeft'])  board.target=Math.max(board.w/2, board.target-10);
+  if(keys['ArrowRight']) board.target=Math.min(W-board.w/2, board.target+10);
+},16);
+
+canvas.addEventListener('mousemove',e=>{
+  const rect=canvas.getBoundingClientRect();
+  board.target=(e.clientX-rect.left)*(W/rect.width);
+});
+canvas.addEventListener('click',()=>handleStart());
+document.getElementById('btnStart').addEventListener('click',()=>handleStart());
+
+function handleStart(){
+  if(state==='idle'||state==='dead'||state==='win'){ reset(); }
+  if(state==='ready'){ state='play'; setMsg('← → 键或鼠标移动挡板'); }
+}
+
+reset(); loop();
+</script>
